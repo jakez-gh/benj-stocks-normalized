@@ -4,14 +4,49 @@ __pycache__/
 *$py.class
 *.so
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
 .venv/
 venv/
+ENV/
 env/
+
+# Env files (secrets)
 .env
-*.egg-info/
-.eggs/
-dist/
-build/
+.env.*
+!.env.example
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Type checking / linters
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+
+# Jupyter
+.ipynb_checkpoints/
 
 # IDE / OS
 .idea/
