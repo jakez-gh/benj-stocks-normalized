@@ -1,109 +1,118 @@
-# benj-stocks
+# benj-stocks-normalized
 
-Private workspace for Python libraries and related project code related to trading stocks.
+Python library that builds on **[benj-stocks](https://github.com/jakez-gh/benj-stocks)** (`daily-bars` and friends) to expose a **stable, analysis-oriented** view of the same investor-continuous daily OHLCV data.
 
-## `libs/` layout (daily OHLCV)
+## Role
 
-| Directory | Distribution / import | Role |
-|-----------|------------------------|------|
-| `daily_bars_core` | `daily-bars-core` → `daily_bars_core` | Shared `DailyBar`, `DailyBarsSource`, date filtering, compare helpers |
-| `daily_bars_stooq` | `daily-bars-stooq` → `daily_bars_stooq` | Stooq CSV fetch + parse |
-| `daily_bars_yahoo` | `daily-bars-yahoo` → `daily_bars_yahoo` | Yahoo Finance via `yfinance` |
-| `daily_bars_alpha_vantage` | `daily-bars-alpha-vantage` → `daily_bars_alpha_vantage` | Alpha Vantage `TIME_SERIES_DAILY_ADJUSTED` |
-| `daily_bars` | `daily-bars` → `daily_bars` | Combined facade: registry, degradation + fusion, re-exports |
+- **Data source**: [benj-stocks](https://github.com/jakez-gh/benj-stocks) (`daily_bars.fetch_daily_bars_with_degradation`, fusion, vendor symbols).
+- **This package**: `NormalizedDailyBar` (level OHLCV), optional **OHLC scaling** (first close = 1), **close z-scores** over the window, and **tanh day-over-day deltas** in `TanhDeltaDailyBar` (primary normalized signal for models).
 
-### Install
+### Tanh deltas (default story)
 
-From the repo root (use your own venv path if different):
+Each field is compared to **yesterday’s same field** (open vs prior open, …, volume vs prior volume). **Any price or volume ≤ 0 is treated as 0** before the rules run.
+
+**Boundary semantics** (per field, after that coercion): both effective levels **0** → **0.0**; **0 → positive** → **1.0**; **positive → 0** → **−1.0**. When **both prior and current are > 0** and **equal** → **0.0**; when **both > 0** and **unequal** → `tanh(delta_scale * (current − prior) / prior)` in **(−1, 1)**. **Volume** follows the same rules.
+
+We use **per-field** deltas rather than a single tanh anchored only to yesterday’s close for all of O/H/L/C: that keeps gaps and intraday structure interpretable. With `drop_first=True` (default), the first row is omitted because there is no prior session.
+
+## Install
+
+Dependencies are pulled from the `main` branch of benj-stocks via PEP 508 Git URLs (see `pyproject.toml`).
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e "libs/daily_bars_core[dev]" -e "libs/daily_bars_stooq[dev]" -e "libs/daily_bars_yahoo[dev]" -e "libs/daily_bars_alpha_vantage[dev]" -e "libs/daily_bars[dev]"
+.venv/bin/pip install -e ".[dev]"
 ```
 
-Run tests:
-
-```bash
-.venv/bin/pytest libs/daily_bars_core/tests libs/daily_bars_stooq/tests libs/daily_bars_yahoo/tests libs/daily_bars_alpha_vantage/tests libs/daily_bars/tests -q
-```
-
-### Usage
-
-**Environment**
-
-- **Alpha Vantage**: set `ALPHAVANTAGE_API_KEY`, or pass `api_key=` into `AlphaVantageDailyBarsSource` / `build_source_registry(alpha_vantage_api_key="...")`.
-
-**Recommended: one call, multiple vendors, degrade + fuse**
-
-Use the combined package so offline feeds do not crash the run; surviving data is merged per calendar day (see fusion rules below).
+## Usage
 
 ```python
 from datetime import date
 
-from daily_bars import build_source_registry, fetch_daily_bars_with_degradation
+from benj_stocks_normalized import (
+    fetch_normalized_daily_bars,
+    scale_ohlc_by_first_close,
+    with_close_zscore,
+)
 
-registry = build_source_registry()  # or alpha_vantage_api_key="..."
-
-bars, report = fetch_daily_bars_with_degradation(
-    registry,
+bars, report = fetch_normalized_daily_bars(
     "AAPL",
     start=date(2024, 1, 1),
     end=date(2024, 6, 30),
-    source_order=("yahoo", "stooq", "alpha_vantage"),
     symbols_by_source={
         "yahoo": "AAPL",
         "stooq": "aapl.us",
         "alpha_vantage": "AAPL",
     },
-    # optional: relative_close_epsilon=0.005  # default 0.5% for two-feed agreement
 )
 
-for b in bars:
-    print(b.trade_date, b.open, b.high, b.low, b.close, b.volume)
+scaled = scale_ohlc_by_first_close(bars)
+z = with_close_zscore(scaled)
 
-print("failed:", report.sources_failed)
-print("errors:", report.errors)
+for b in z[:5]:
+    print(b.trade_date, b.close, b.close_zscore)
+
+print("sources failed:", report.sources_failed)
 ```
 
-Inspect `report.sources_attempted`, `report.sources_succeeded`, `report.bar_counts` for logging.
-
-**Single vendor**
+**Tanh deltas (end-to-end from GitHub benj-stocks):**
 
 ```python
-from daily_bars_yahoo import YahooDailyBarsSource
-from datetime import date
+from benj_stocks_normalized import fetch_tanh_delta_daily_bars
 
-src = YahooDailyBarsSource()
-bars = src.fetch_daily_bars("AAPL", start=date(2024, 1, 1), end=date(2024, 1, 31))
+td, report = fetch_tanh_delta_daily_bars(
+    "AAPL",
+    start=date(2024, 1, 1),
+    end=date(2024, 6, 30),
+    symbols_by_source={"yahoo": "AAPL", "stooq": "aapl.us", "alpha_vantage": "AAPL"},
+    delta_scale=1.0,
+    drop_first=True,
+)
+for row in td[:5]:
+    print(row.trade_date, row.open_tanh, row.close_tanh, row.volume_tanh)
 ```
 
-```python
-from daily_bars_stooq import retrieve_daily_bars_stooq
-from datetime import date
+Alpha Vantage: set `ALPHAVANTAGE_API_KEY` or pass `alpha_vantage_api_key=` into `fetch_normalized_daily_bars` or `fetch_tanh_delta_daily_bars`.
 
-bars = retrieve_daily_bars_stooq("aapl.us", start=date(2024, 1, 1), end=date(2024, 1, 31))
+You can also pass a custom `registry=` from `daily_bars.build_source_registry` if you construct sources yourself.
+
+## Testing
+
+After `pip install -e ".[dev]"`, run:
+
+```bash
+python3 -m pytest tests/ -q
 ```
 
-**Registry without degradation** (you handle errors yourself):
+Tests are **strict and offline-friendly**: `daily_bars.fetch_daily_bars_with_degradation` is **mocked** in `tests/test_api.py`, so the suite does not hit Yahoo/Stooq/Alpha Vantage. **Convert**, **transforms**, and **`_tanh_pct_delta`** semantics are covered directly; there is **no** live end-to-end network test in CI yet—add a manual or opt-in integration test if you want that.
 
-```python
-from daily_bars import build_source_registry, get_source
+## API
 
-reg = build_source_registry()
-bars = get_source(reg, "yahoo").fetch_daily_bars("AAPL", start=..., end=...)
-```
+| Export | Purpose |
+|--------|--------|
+| `fetch_normalized_daily_bars` | Fetch fused bars from `daily_bars`, return `list[NormalizedDailyBar]` + `DegradationReport` |
+| `fetch_tanh_delta_daily_bars` | Same fetch + `with_tanh_deltas_from_previous` (`delta_scale`, `drop_first`, same kwargs as above) |
+| `daily_bars_to_normalized` | Map existing `DailyBar` rows to `NormalizedDailyBar` |
+| `scale_ohlc_by_first_close` | Normalize OHLC by the first bar’s close; volume unchanged (shares) |
+| `with_close_zscore` | Population z-score of close over the series (`close_zscore` field) |
+| `with_tanh_deltas_from_previous` | Build `TanhDeltaDailyBar` from `NormalizedDailyBar` (per-field rules + `tanh` when both levels > 0) |
+| `NormalizedDailyBar` | Level OHLCV row: `symbol`, `trade_date`, OHLC, `volume` (float), optional `close_zscore` |
+| `TanhDeltaDailyBar` | `open_tanh`, …, `volume_tanh` in **[-1.0, 1.0]** (tanh interior or sentinel ±1 / 0) |
+| `DegradationReport` | Re-export from `daily_bars` (multi-source fetch summary) |
+| `DEFAULT_RELATIVE_CLOSE_EPSILON` | Re-export from `daily_bars` (fusion agreement tolerance, default `0.005`) |
 
-**Core helpers** (compare two series, align dates):
+Semantics of the underlying bars (splits, dividends, multi-source fusion) match benj-stocks / `daily-bars` documentation.
 
-```python
-from daily_bars import align_by_date, mismatch_summary_for_date
-```
+## Status
 
-### Semantics
+Early **0.1** library: suitable for local pipelines and notebooks. **Not** on PyPI yet; **no** GitHub Actions workflow in-repo yet—add CI (install + `pytest`) when you want automated checks.
 
-- Bars are **investor-continuous** (split- and dividend-adjusted). Stooq raw CSV is restated using Yahoo adjustment ratios for the mapped ticker (e.g. `aapl.us` → `AAPL`).
-- **`fetch_daily_bars_with_degradation`** tries each source in `source_order`, skips failures, then **`fuse_daily_bars_by_consensus`**: one feed → that bar; two feeds → **average** OHLCV if relative close agreement ≤ **0.5%** (`DEFAULT_RELATIVE_CLOSE_EPSILON`), else **primary** (first in order); **three or more** → **median close**, OHLC scaled from the bar whose close is nearest the median (tie → earlier in order), **median volume**. Returns `([], report)` if nothing usable is returned—no exception solely because one feed failed.
+### What is documented where
 
-### Status (daily OHLCV stack)
-
-**v0.1 — good enough to use locally and move on.** Packages are at `0.1.0`, editable from `libs/`, with **35** tests across the five packages. Optional later: CI, PyPI, response caching, retries.
+| Topic | Where |
+|--------|--------|
+| Install, usage, tanh semantics, API surface | This README |
+| Package metadata, deps on benj-stocks | `pyproject.toml` |
+| Public re-exports | `benj_stocks_normalized.__init__` and `__all__` |
+| Function / type behavior | Docstrings on `api`, `convert`, `transforms`, `schema` |
+| Regression / TDD specs | `tests/` (see Testing above) |

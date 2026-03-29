@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "benj-stocks-normalized"
+version = "0.1.0"
+description = "Canonical and scaled daily OHLCV built on top of benj-stocks (daily-bars)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "daily-bars-core @ git+https://github.com/jakez-gh/benj-stocks.git@main#subdirectory=libs/daily_bars_core",
+    "daily-bars-stooq @ git+https://github.com/jakez-gh/benj-stocks.git@main#subdirectory=libs/daily_bars_stooq",
+    "daily-bars-yahoo @ git+https://github.com/jakez-gh/benj-stocks.git@main#subdirectory=libs/daily_bars_yahoo",
+    "daily-bars-alpha-vantage @ git+https://github.com/jakez-gh/benj-stocks.git@main#subdirectory=libs/daily_bars_alpha_vantage",
+    "daily-bars @ git+https://github.com/jakez-gh/benj-stocks.git@main#subdirectory=libs/daily_bars",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
